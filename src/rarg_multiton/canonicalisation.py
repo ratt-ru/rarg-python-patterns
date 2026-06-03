@@ -1,13 +1,42 @@
 import inspect
 from collections.abc import Callable, Hashable, Mapping, Sequence, Set
+from functools import singledispatch
 from typing import Any, Dict, Tuple
 
 try:
   from numpy import ndarray
 except ImportError:
   # numpy is an optional dependency. Without it, ndarray factory arguments
-  # simply fall through to the default branch in ``freeze``.
+  # simply fall through to the default freezer.
   ndarray = None  # type: ignore[assignment,misc]
+
+
+@singledispatch
+def _registered_freeze(arg: Any) -> Any:
+  """Fallback freezer for types without a registered handler.
+
+  The default leaves the argument unchanged, matching the behaviour of
+  values that are already immutable and hashable.
+  """
+  return arg
+
+
+def register_freezer(
+  cls: type,
+) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
+  """Register a freezer for ``cls`` (and its subclasses).
+
+  The decorated function is consulted by :func:`freeze` for instances of
+  ``cls``. Dispatch is by type via :func:`functools.singledispatch`, so
+  lookup is O(1) (MRO-cached) rather than a linear scan over freezers.
+
+  Args:
+    cls: the type the decorated freezer handles.
+
+  Returns:
+    A decorator that registers and returns the freezer unchanged.
+  """
+  return _registered_freeze.register(cls)
 
 
 def freeze(arg: Any) -> Any:
@@ -24,10 +53,17 @@ def freeze(arg: Any) -> Any:
     return frozenset(map(freeze, arg))
   elif isinstance(arg, Mapping):
     return frozenset((k, freeze(v)) for k, v in arg.items())
-  elif ndarray is not None and isinstance(arg, ndarray):
-    return (arg.data.tobytes(), arg.shape, arg.dtype.char)
   else:
-    return arg
+    # Abstract-container handling above takes precedence; concrete types
+    # (e.g. ndarray) are resolved through the freezer registry.
+    return _registered_freeze(arg)
+
+
+if ndarray is not None:
+
+  @register_freezer(ndarray)
+  def _freeze_ndarray(arg: Any) -> Tuple[bytes, Tuple[int, ...], str]:
+    return (arg.data.tobytes(), arg.shape, arg.dtype.char)
 
 
 class FrozenKey(Hashable):
