@@ -27,6 +27,7 @@ Removed
 
 Added
 -----
+- Use ``rarg-gh-workflows`` to simplify and modularise Continuous Integration (:pr:`2`)
 - Add ``register_freezer`` for custom type canonicalisation (:pr:`1`)
 - Initial release: ``Multiton`` pattern with TTL-based cache expiry, extracted
   from `ratt-ru/xarray-kat`_.
