@@ -27,6 +27,7 @@ Removed
 
 Added
 -----
+- Add ``register_freezer`` for custom type canonicalisation (:pr:`1`)
 - Initial release: ``Multiton`` pattern with TTL-based cache expiry, extracted
   from `ratt-ru/xarray-kat`_.
 
