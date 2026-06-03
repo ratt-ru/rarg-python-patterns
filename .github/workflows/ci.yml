@@ -14,4 +14,4 @@ jobs:
   test:
     uses: ratt-ru/rarg-gh-workflows/.github/workflows/python-test.yml@main
     with:
-      os-matrix: ["ubuntu-24.04", "macos-15"]
+      os-matrix: '["ubuntu-24.04", "macos-15"]'
