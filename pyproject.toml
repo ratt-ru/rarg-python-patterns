@@ -1,0 +1,63 @@
+[project]
+name = "rarg-multiton"
+version = "0.0.1"
+description = "A Multiton pattern implementation with TTL-based cache expiry"
+readme = "README.md"
+authors = [
+    { name = "Simon Perkins", email = "simon.perkins@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "tbump>=6.11.0",
+]
+test = [
+    "cloudpickle>=3.1.1",
+    "dill>=0.4.0",
+    "numpy>=1.26",
+    "pytest>=8.4.2",
+]
+
+[tool.ruff]
+line-length = 88
+indent-width = 2
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I001"]
+extend-select = ["I"]
+
+[tool.tbump]
+# Uncomment this if your project is hosted on GitHub:
+# github_url = "https://github.com/ratt-ru/rarg-multiton/"
+
+[tool.tbump.version]
+current = "0.0.1"
+
+# Example of a semver regexp.
+# Make sure this matches current_version before
+# using tbump
+regex = '''
+  (?P<major>\d+)
+  \.
+  (?P<minor>\d+)
+  \.
+  (?P<patch>\d+)
+  '''
+
+[tool.tbump.git]
+message_template = "Bump to {new_version}"
+tag_template = "{new_version}"
+
+# For each file to patch, add a [[tool.tbump.file]] config
+# section containing the path of the file, relative to the
+# tbump.toml location.
+[[tool.tbump.file]]
+src = "pyproject.toml"
