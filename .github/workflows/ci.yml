@@ -16,3 +16,7 @@ jobs:
     with:
       os-matrix: '["ubuntu-24.04", "macos-15"]'
       install-command: 'pip install --group test .'
+
+  deploy:
+    needs: ["test"]
+    uses: ratt-ru/rarg-gh-workflows/.github/workflows/python-deploy.yml@main
