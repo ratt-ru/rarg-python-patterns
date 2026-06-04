@@ -207,27 +207,21 @@ def test_multiton_with_ttl_inf_equivalent():
   assert m_finite._ttl == m_args._ttl == 10.0
 
 
-def test_multiton_eternal_heap_compaction():
-  """Repeated access to an eternal entry doesn't grow the heap without bound.
+def test_multiton_eternal_ttl_never_grows_heap():
+  """An eternal entry is never pushed onto the heap, regardless of access count.
 
-  Each access resets the TTL and pushes a fresh (inf, ...) tuple, orphaning the
-  previous one. The sweep loop can never pop inf tuples, so compaction must
-  reclaim them. With a single eternal entry there are zero live finite tuples,
-  so a compaction empties the heap entirely.
+  An ``inf`` deadline could never satisfy the sweep condition, so _write_entry
+  skips the heap push entirely for eternal entries. Creating and repeatedly
+  accessing (each access a TTL reset, i.e. another _write_entry) a lone eternal
+  entry must therefore leave the heap empty the whole time — no orphaned inf
+  tuples accumulate and no compaction is ever needed to reclaim them.
   """
-  with (
-    patch.object(Multiton, "_HEAP_COMPACT_MIN", 4),
-    patch.object(Multiton, "_HEAP_COMPACT_FACTOR", 2.0),
-  ):
-    m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
-    inst1 = m.instance
-    for _ in range(50):
-      assert m.instance is inst1
-      # Purge compacts once the heap exceeds the threshold (4 here, since the
-      # lone eternal entry never contributes a live finite tuple); the hit path
-      # then pushes one fresh tuple, so the heap peaks at _HEAP_COMPACT_MIN + 1
-      # rather than growing with the access count.
-      assert len(Multiton._EXPIRY_HEAP) <= Multiton._HEAP_COMPACT_MIN + 1
+  m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
+  inst1 = m.instance
+  assert len(Multiton._EXPIRY_HEAP) == 0
+  for _ in range(50):
+    assert m.instance is inst1
+    assert len(Multiton._EXPIRY_HEAP) == 0
 
 
 def test_multiton_finite_heap_compaction_discards_stale():
@@ -301,6 +295,8 @@ def test_multiton_mixed_finite_and_eternal():
     finite.instance
     eternal_inst = eternal.instance
     assert len(Multiton._INSTANCE_CACHE) == 2
+    # Only the finite entry is on the heap; the eternal one is never pushed.
+    assert len(Multiton._EXPIRY_HEAP) == 1
 
     # Advance past the finite TTL; accessing the eternal entry triggers a sweep.
     t[0] = 10.0

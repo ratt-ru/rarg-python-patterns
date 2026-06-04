@@ -33,10 +33,11 @@ class Multiton(Generic[T]):
 
   A ``ttl`` of ``math.inf`` (set via ``with_ttl(math.inf)`` or the
   ``with_infinite_ttl()`` shorthand) makes an entry eternal: it never
-  expires and is only removed by ``release()``. Eternal entries are still
-  pushed onto the heap but their ``inf`` deadline never satisfies the sweep
-  condition, so the heap self-compacts (discarding ``inf`` and stale tuples)
-  whenever it grows much larger than the live cache.
+  expires and is only removed by ``release()``. Eternal entries are never
+  pushed onto the heap (an ``inf`` deadline could never satisfy the sweep
+  condition anyway), so they cost nothing in heap space. The heap holds
+  only finite-TTL tuples and self-compacts to discard stale ones whenever
+  it grows much larger than the live cache.
 
   .. code-block:: python
 
@@ -136,23 +137,29 @@ class Multiton(Generic[T]):
 
   @classmethod
   def _write_entry(cls, key: FrozenKey, obj: Any, ttl: float) -> None:
-    """Write a cache entry and push the corresponding heap entry.
-    Must be called under the lock."""
+    """Write a cache entry, pushing a heap entry only for a finite TTL.
+    Must be called under the lock.
+
+    Eternal (``inf``) entries are never pushed: an ``inf`` deadline could
+    never satisfy the sweep condition, so it would only bloat the heap."""
     seq = next(cls._SEQUENCE)
     now = time.monotonic()
     cls._INSTANCE_CACHE[key] = (obj, now, ttl, seq)
-    heapq.heappush(cls._EXPIRY_HEAP, (now + ttl, seq, key))
+
+    if not math.isinf(ttl):
+      heapq.heappush(cls._EXPIRY_HEAP, (now + ttl, seq, key))
 
   @classmethod
   def _compact_heap(cls) -> None:
     """Rebuild the heap from live, finite-TTL cache entries.
     Must be called under the lock.
 
-    Iterating the cache and re-emitting one tuple per live key (with that
-    entry's current seq) structurally discards both eternal (``inf``) tuples
-    and any finite tuple whose seq no longer matches its cache entry — i.e.
-    stale entries left by TTL resets or releases that the sweep loop can't
-    reach. ``last + ttl`` reproduces the exact expiry pushed for that seq.
+    Iterating the cache and re-emitting one tuple per live finite-TTL key
+    (with that entry's current seq) discards any finite tuple whose seq no
+    longer matches its cache entry — i.e. stale entries left by TTL resets
+    or releases that the sweep loop can't reach. Eternal (``inf``) entries
+    are skipped, mirroring ``_write_entry`` never pushing them onto the heap.
+    ``last + ttl`` reproduces the exact expiry pushed for that seq.
     """
     cls._EXPIRY_HEAP[:] = [
       (last + ttl, seq, key)
@@ -168,9 +175,9 @@ class Multiton(Generic[T]):
 
     Pops heap entries whose deadline has passed, discarding those whose seq
     no longer matches the cache (stale due to TTL reset or release). Eternal
-    (``inf``) tuples never satisfy the deadline, so once the heap grows much
-    larger than the live cache it is compacted to reclaim them along with any
-    stale finite tuples.
+    entries are never on the heap, so it holds only finite tuples; once it
+    grows much larger than the live cache it is compacted to reclaim the
+    stale finite tuples left behind by TTL resets and releases.
     """
     now = time.monotonic()
     while cls._EXPIRY_HEAP and cls._EXPIRY_HEAP[0][0] <= now:
