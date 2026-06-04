@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import math
+import numbers
 import time
 from threading import RLock
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
@@ -29,6 +31,14 @@ class Multiton(Generic[T]):
   swept from the cache on every ``instance`` access via a min-heap ordered
   by expiry time, so only genuinely expired entries are visited.
 
+  A ``ttl`` of ``math.inf`` (set via ``with_ttl(math.inf)`` or the
+  ``with_infinite_ttl()`` shorthand) makes an entry eternal: it never
+  expires and is only removed by ``release()``. Eternal entries are never
+  pushed onto the heap (an ``inf`` deadline could never satisfy the sweep
+  condition anyway), so they cost nothing in heap space. The heap holds
+  only finite-TTL tuples and self-compacts to discard stale ones whenever
+  it grows much larger than the live cache.
+
   .. code-block:: python
 
     # Factory function creating a resource
@@ -48,6 +58,10 @@ class Multiton(Generic[T]):
   _EXPIRY_HEAP: ClassVar[List[_HeapEntry]] = []
   _SEQUENCE: ClassVar[itertools.count] = itertools.count()
   _INSTANCE_LOCK: ClassVar[RLock] = RLock()
+  # Compact the heap once it exceeds max(_HEAP_COMPACT_MIN,
+  # _HEAP_COMPACT_FACTOR * len(cache)) entries, bounding stale/eternal bloat.
+  _HEAP_COMPACT_MIN: ClassVar[float] = 32
+  _HEAP_COMPACT_FACTOR: ClassVar[float] = 2.0
 
   __slots__ = ("_factory", "_args", "_kw", "_key", "_ttl")
 
@@ -79,10 +93,31 @@ class Multiton(Generic[T]):
       ttl: Time-to-live in seconds for the cached instance. Accessing
         ``instance`` resets the TTL. Only takes effect when this Multiton
         first creates the cache entry; if an entry already exists its TTL
-        is not changed.
+        is not changed. ``math.inf`` makes the entry eternal. Must be a real
+        number; ``nan`` is rejected, as it would never satisfy the expiry
+        comparison and would leak in the heap.
     """
+    if not isinstance(ttl, numbers.Real) or math.isnan(ttl):
+      raise ValueError(f"ttl must be a real number, not nan (got {ttl!r})")
     self._ttl = ttl
     return self
+
+  def with_ttl(self, ttl: float) -> Multiton[T]:
+    """Set the per-instance TTL and return ``self`` for chaining.
+
+    Arguments:
+      ttl: Time-to-live in seconds for the cached instance. ``math.inf``
+        makes the entry eternal (never expires; only removed by ``release()``).
+        See :meth:`with_args` for the TTL-reset and first-write semantics.
+    """
+    return self.with_args(ttl=ttl)
+
+  def with_infinite_ttl(self) -> Multiton[T]:
+    """Cache the instance forever (until explicitly released).
+
+    Shorthand for ``with_ttl(math.inf)``; returns ``self`` for chaining.
+    """
+    return self.with_args(ttl=math.inf)
 
   @staticmethod
   def from_reduce_args(factory: Callable[..., T], args, kw, ttl: float) -> Multiton[T]:
@@ -102,12 +137,36 @@ class Multiton(Generic[T]):
 
   @classmethod
   def _write_entry(cls, key: FrozenKey, obj: Any, ttl: float) -> None:
-    """Write a cache entry and push the corresponding heap entry.
-    Must be called under the lock."""
+    """Write a cache entry, pushing a heap entry only for a finite TTL.
+    Must be called under the lock.
+
+    Eternal (``inf``) entries are never pushed: an ``inf`` deadline could
+    never satisfy the sweep condition, so it would only bloat the heap."""
     seq = next(cls._SEQUENCE)
     now = time.monotonic()
     cls._INSTANCE_CACHE[key] = (obj, now, ttl, seq)
-    heapq.heappush(cls._EXPIRY_HEAP, (now + ttl, seq, key))
+
+    if not math.isinf(ttl):
+      heapq.heappush(cls._EXPIRY_HEAP, (now + ttl, seq, key))
+
+  @classmethod
+  def _compact_heap(cls) -> None:
+    """Rebuild the heap from live, finite-TTL cache entries.
+    Must be called under the lock.
+
+    Iterating the cache and re-emitting one tuple per live finite-TTL key
+    (with that entry's current seq) discards any finite tuple whose seq no
+    longer matches its cache entry — i.e. stale entries left by TTL resets
+    or releases that the sweep loop can't reach. Eternal (``inf``) entries
+    are skipped, mirroring ``_write_entry`` never pushing them onto the heap.
+    ``last + ttl`` reproduces the exact expiry pushed for that seq.
+    """
+    cls._EXPIRY_HEAP[:] = [
+      (last + ttl, seq, key)
+      for key, (_, last, ttl, seq) in cls._INSTANCE_CACHE.items()
+      if not math.isinf(ttl)
+    ]
+    heapq.heapify(cls._EXPIRY_HEAP)
 
   @classmethod
   def _purge_expired(cls) -> None:
@@ -115,7 +174,10 @@ class Multiton(Generic[T]):
     Must be called under the lock.
 
     Pops heap entries whose deadline has passed, discarding those whose seq
-    no longer matches the cache (stale due to TTL reset or release).
+    no longer matches the cache (stale due to TTL reset or release). Eternal
+    entries are never on the heap, so it holds only finite tuples; once it
+    grows much larger than the live cache it is compacted to reclaim the
+    stale finite tuples left behind by TTL resets and releases.
     """
     now = time.monotonic()
     while cls._EXPIRY_HEAP and cls._EXPIRY_HEAP[0][0] <= now:
@@ -125,6 +187,12 @@ class Multiton(Generic[T]):
         # stale: key was released, or TTL was reset since this heap entry was pushed
         continue
       del cls._INSTANCE_CACHE[key]
+
+    threshold = max(
+      cls._HEAP_COMPACT_MIN, cls._HEAP_COMPACT_FACTOR * len(cls._INSTANCE_CACHE)
+    )
+    if len(cls._EXPIRY_HEAP) > threshold:
+      cls._compact_heap()
 
   @property
   def instance(self) -> T:

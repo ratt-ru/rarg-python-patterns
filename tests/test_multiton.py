@@ -1,3 +1,4 @@
+import math
 import pickle
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -177,6 +178,145 @@ def test_multiton_ttl_reset_on_access():
     t[0] = 29.0
     inst2 = m.instance
     assert inst2 is not inst1
+
+
+def test_multiton_infinite_ttl_never_expires():
+  """An eternal entry survives an arbitrarily large clock advance."""
+  t = [0.0]
+
+  def fake_monotonic():
+    return t[0]
+
+  with patch("rarg_multiton.multiton.time") as mock_time:
+    mock_time.monotonic.side_effect = fake_monotonic
+
+    m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
+    inst1 = m.instance
+
+    t[0] = 1e18
+    assert m.instance is inst1
+
+
+def test_multiton_with_ttl_inf_equivalent():
+  """with_ttl(math.inf) is eternal; with_ttl(x) matches with_args(ttl=x)."""
+  m_inf = Multiton(Data, 1.0, b=3.0).with_ttl(math.inf)
+  assert m_inf._ttl == math.inf
+
+  m_finite = Multiton(Data, 2.0, b=3.0).with_ttl(10.0)
+  m_args = Multiton(Data, 2.0, b=3.0).with_args(ttl=10.0)
+  assert m_finite._ttl == m_args._ttl == 10.0
+
+
+def test_multiton_eternal_ttl_never_grows_heap():
+  """An eternal entry is never pushed onto the heap, regardless of access count.
+
+  An ``inf`` deadline could never satisfy the sweep condition, so _write_entry
+  skips the heap push entirely for eternal entries. Creating and repeatedly
+  accessing (each access a TTL reset, i.e. another _write_entry) a lone eternal
+  entry must therefore leave the heap empty the whole time — no orphaned inf
+  tuples accumulate and no compaction is ever needed to reclaim them.
+  """
+  m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
+  inst1 = m.instance
+  assert len(Multiton._EXPIRY_HEAP) == 0
+  for _ in range(50):
+    assert m.instance is inst1
+    assert len(Multiton._EXPIRY_HEAP) == 0
+
+
+def test_multiton_finite_heap_compaction_discards_stale():
+  """Compaction drops stale (seq-mismatched) finite tuples, keeping the live one."""
+  t = [0.0]
+
+  def fake_monotonic():
+    return t[0]
+
+  with (
+    patch("rarg_multiton.multiton.time") as mock_time,
+    patch.object(Multiton, "_HEAP_COMPACT_MIN", 4),
+    patch.object(Multiton, "_HEAP_COMPACT_FACTOR", 2.0),
+  ):
+    mock_time.monotonic.side_effect = fake_monotonic
+
+    m = Multiton(Data, 1.0, b=3.0).with_args(ttl=1000.0)
+    inst1 = m.instance
+    # Reset the TTL repeatedly without advancing past it: each access orphans a
+    # heap tuple with a stale seq. None are popped (deadline far in the future),
+    # so without compaction the heap would grow to ~50. Compaction discards the
+    # stale tuples on the seq mismatch, keeping the heap bounded and the single
+    # live entry intact.
+    for _ in range(50):
+      assert m.instance is inst1
+      assert len(Multiton._EXPIRY_HEAP) <= Multiton._HEAP_COMPACT_MIN + 1
+    assert len(Multiton._INSTANCE_CACHE) == 1
+
+
+def test_multiton_nan_ttl_rejected():
+  """A nan TTL is rejected; it would never expire and would leak in the heap."""
+  with pytest.raises(ValueError, match="real number"):
+    Multiton(Data, 1.0, b=3.0).with_args(ttl=math.nan)
+  with pytest.raises(ValueError, match="real number"):
+    Multiton(Data, 1.0, b=3.0).with_ttl(math.nan)
+
+
+def test_multiton_non_numeric_ttl_rejected():
+  """A non-real TTL is rejected with a ValueError, not a downstream TypeError."""
+  for bad in (None, "10", 1j):
+    with pytest.raises(ValueError, match="real number"):
+      Multiton(Data, 1.0, b=3.0).with_args(ttl=bad)
+
+
+def test_multiton_int_ttl_accepted():
+  """An int TTL is a valid real number and behaves like its float value."""
+  m = Multiton(Data, 1.0, b=3.0).with_ttl(10)
+  assert m._ttl == 10
+  assert m.instance == Data(1.0, 3.0)
+
+
+def test_multiton_infinite_ttl_pickle_roundtrip():
+  """An infinite TTL is preserved through a pickle round-trip."""
+  m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
+  m2 = pickle.loads(pickle.dumps(m))
+  assert m2._ttl == math.inf
+
+
+def test_multiton_mixed_finite_and_eternal():
+  """A finite entry expires and is swept while an eternal entry survives."""
+  t = [0.0]
+
+  def fake_monotonic():
+    return t[0]
+
+  with patch("rarg_multiton.multiton.time") as mock_time:
+    mock_time.monotonic.side_effect = fake_monotonic
+
+    finite = Multiton(Data, 1.0, b=1.0).with_args(ttl=5.0)
+    eternal = Multiton(Data, 2.0, b=2.0).with_infinite_ttl()
+    finite.instance
+    eternal_inst = eternal.instance
+    assert len(Multiton._INSTANCE_CACHE) == 2
+    # Only the finite entry is on the heap; the eternal one is never pushed.
+    assert len(Multiton._EXPIRY_HEAP) == 1
+
+    # Advance past the finite TTL; accessing the eternal entry triggers a sweep.
+    t[0] = 10.0
+    assert eternal.instance is eternal_inst
+    assert finite._key not in Multiton._INSTANCE_CACHE
+    assert eternal._key in Multiton._INSTANCE_CACHE
+
+
+def test_multiton_infinite_ttl_release():
+  """An eternal entry can be released and is recreated on next access."""
+  m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
+  inst1 = m.instance
+  assert len(Multiton._INSTANCE_CACHE) == 1
+
+  m.release()
+  assert len(Multiton._INSTANCE_CACHE) == 0
+
+  inst2 = m.instance
+  assert inst2 is not inst1
+  assert inst2 == inst1
 
 
 def test_multiton_ttl_pickle_roundtrip():
