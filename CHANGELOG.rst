@@ -27,6 +27,7 @@ Removed
 
 Added
 -----
+- Inline the deploy step in ``ci.yml`` (:pr:`4`)
 - Support infinite TTL: ``with_ttl(math.inf)`` (and the ``with_infinite_ttl()``
   shorthand) makes a cache entry eternal — it never expires and is only removed
   by ``release()`` (:pr:`3`).
