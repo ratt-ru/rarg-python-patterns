@@ -27,6 +27,9 @@ Removed
 
 Added
 -----
+- Support infinite TTL: ``with_ttl(math.inf)`` (and the ``with_infinite_ttl()``
+  shorthand) makes a cache entry eternal — it never expires and is only removed
+  by ``release()`` (:pr:`3`).
 - Use ``rarg-gh-workflows`` to simplify and modularise Continuous Integration (:pr:`2`)
 - Add ``register_freezer`` for custom type canonicalisation (:pr:`1`)
 - Initial release: ``Multiton`` pattern with TTL-based cache expiry, extracted
