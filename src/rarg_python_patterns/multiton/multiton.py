@@ -8,7 +8,7 @@ import time
 from threading import RLock
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
 
-from rarg_multiton.canonicalisation import FrozenKey, normalise_args
+from rarg_python_patterns.multiton.canonicalisation import FrozenKey, normalise_args
 
 T = TypeVar("T")
 

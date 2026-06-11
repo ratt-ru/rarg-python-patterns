@@ -1,6 +1,6 @@
 import pytest
 
-from rarg_multiton import Multiton
+from rarg_python_patterns import Multiton
 
 
 @pytest.fixture(autouse=True)

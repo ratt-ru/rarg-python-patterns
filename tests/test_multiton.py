@@ -7,7 +7,7 @@ import cloudpickle
 import dill
 import pytest
 
-from rarg_multiton import Multiton
+from rarg_python_patterns import Multiton
 
 
 @dataclass
@@ -136,7 +136,7 @@ def test_multiton_ttl_expiry():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     m = Multiton(Data, 1.0, b=3.0).with_args(ttl=10.0)
@@ -160,7 +160,7 @@ def test_multiton_ttl_reset_on_access():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     m = Multiton(Data, 1.0, b=3.0).with_args(ttl=10.0)
@@ -187,7 +187,7 @@ def test_multiton_infinite_ttl_never_expires():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl()
@@ -232,7 +232,7 @@ def test_multiton_finite_heap_compaction_discards_stale():
     return t[0]
 
   with (
-    patch("rarg_multiton.multiton.time") as mock_time,
+    patch("rarg_python_patterns.multiton.multiton.time") as mock_time,
     patch.object(Multiton, "_HEAP_COMPACT_MIN", 4),
     patch.object(Multiton, "_HEAP_COMPACT_FACTOR", 2.0),
   ):
@@ -287,7 +287,7 @@ def test_multiton_mixed_finite_and_eternal():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     finite = Multiton(Data, 1.0, b=1.0).with_args(ttl=5.0)
@@ -339,7 +339,7 @@ def test_multiton_expired_entries_swept_on_access():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     m1 = Multiton(Data, 1.0, b=1.0).with_args(ttl=5.0)
@@ -362,7 +362,7 @@ def test_multiton_heap_stale_entries_discarded():
   def fake_monotonic():
     return t[0]
 
-  with patch("rarg_multiton.multiton.time") as mock_time:
+  with patch("rarg_python_patterns.multiton.multiton.time") as mock_time:
     mock_time.monotonic.side_effect = fake_monotonic
 
     m = Multiton(Data, 1.0, b=3.0).with_args(ttl=10.0)
