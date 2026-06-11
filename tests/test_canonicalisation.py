@@ -1,6 +1,6 @@
 import pytest
 
-from rarg_multiton import FrozenKey, freeze, register_freezer
+from rarg_python_patterns import FrozenKey, freeze, register_freezer
 
 
 def test_freeze_basic_types():

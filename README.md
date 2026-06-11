@@ -1,8 +1,11 @@
-# rarg-multiton
+# rarg-python-patterns
 
-A small, self-contained implementation of the
+A small, self-contained collection of reusable Python patterns. The first (and
+currently only) pattern is a **Multiton**: an implementation of the
 [Multiton pattern](https://en.wikipedia.org/wiki/Multiton_pattern) with
-TTL-based cache expiry.
+TTL-based cache expiry, importable from `rarg_python_patterns.multiton`.
+
+## Multiton
 
 A `Multiton` wraps a factory function and its arguments. The underlying
 instance is created lazily on first access to `.instance` and cached, keyed on
@@ -16,7 +19,7 @@ Cached instances expire after `ttl` seconds of inactivity; accessing
 min-heap ordered by expiry time.
 
 ```python
-from rarg_multiton import Multiton
+from rarg_python_patterns import Multiton
 
 
 def open_connection(url: str, timeout: float = 1.0) -> Connection:
@@ -34,7 +37,7 @@ resource = Multiton(open_connection, "https://www.python.org").with_args(ttl=60.
 ## Installation
 
 ```bash
-pip install rarg-multiton
+pip install rarg-python-patterns
 ```
 
 The package has **no required runtime dependencies**. `numpy` is an optional
