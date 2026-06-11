@@ -18,7 +18,7 @@ Changed
 - Rename the project from ``rarg-multiton`` to ``rarg-python-patterns`` and
   restructure it as a patterns collection: the Multiton now lives under the
   ``rarg_python_patterns.multiton`` subpackage. ``from rarg_python_patterns
-  import Multiton`` continues to work via top-level re-exports (pr:`5`).
+  import Multiton`` continues to work via top-level re-exports (:pr:`5`).
 
 Fixed
 -----
