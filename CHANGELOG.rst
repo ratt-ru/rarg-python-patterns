@@ -12,8 +12,6 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 
 Added
 -----
-- Normalise factory args via inspect.signature, fixing class factories (:pr:`7`)
-- Run factories under per-key locks instead of the global instance lock (:pr:`6`)
 
 Changed
 -------
@@ -24,6 +22,14 @@ Fixed
 Removed
 -------
 
+
+0.0.3
+=====
+
+Added
+-----
+- Normalise factory args via inspect.signature, fixing class factories (:pr:`7`)
+- Run factories under per-key locks instead of the global instance lock (:pr:`6`)
 
 0.0.2
 =====
