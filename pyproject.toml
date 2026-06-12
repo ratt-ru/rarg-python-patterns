@@ -1,6 +1,6 @@
 [project]
 name = "rarg-python-patterns"
-version = "0.0.2"
+version = "0.0.3"
 description = "A collection of reusable Python patterns (starting with a Multiton with TTL-based cache expiry)"
 readme = "README.md"
 authors = [
@@ -38,7 +38,7 @@ extend-select = ["I"]
 github_url = "https://github.com/ratt-ru/rarg-python-patterns/"
 
 [tool.tbump.version]
-current = "0.0.2"
+current = "0.0.3"
 
 # Example of a semver regexp.
 # Make sure this matches current_version before
