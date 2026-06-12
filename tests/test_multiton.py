@@ -120,6 +120,57 @@ def test_multiton_classmethod_default_not_duplicated():
   assert m2.instance == Data(2.0, 5.0)
 
 
+class DefaultedData:
+  def __init__(self, a: float, b: float = 10.0):
+    self.a, self.b = a, b
+
+
+def test_multiton_class_factory_defaults():
+  """A class factory with a defaulted __init__ normalises correctly.
+
+  Before the fix, getfullargspec's parameter list included ``self``,
+  shifting positional matching by one: fully-positional calls gained a
+  duplicated default (TypeError at .instance) and equivalent calls
+  produced distinct cache keys.
+  """
+  m1 = Multiton(DefaultedData, 1.0)
+  m2 = Multiton(DefaultedData, 1.0, 10.0)
+  m3 = Multiton(DefaultedData, 1.0, b=10.0)
+  assert m1 == m2 == m3
+  assert m1.instance is m2.instance is m3.instance
+  assert (m1.instance.a, m1.instance.b) == (1.0, 10.0)
+
+
+def test_multiton_class_factory_all_defaulted():
+  """A single positional arg to a fully-defaulted __init__ works."""
+
+  class AllDefaulted:
+    def __init__(self, a=10, b=20):
+      self.a, self.b = a, b
+
+  m = Multiton(AllDefaulted, 1)
+  assert (m.instance.a, m.instance.b) == (1, 20)
+
+
+def test_multiton_class_factory_invalid_call_raises_at_construction():
+  """Invalid factory arguments fail at Multiton(...) time, not .instance."""
+  with pytest.raises(TypeError):
+    Multiton(DefaultedData, 1.0, 2.0, 3.0)
+
+
+def test_multiton_class_factory_default_pickle():
+  """A class factory with defaults round-trips through pickle.
+
+  Re-normalisation on reconstruction must be idempotent: the unpickled
+  Multiton produces the same key and a valid call.
+  """
+  m = Multiton(DefaultedData, 1.0)
+  m2 = pickle.loads(pickle.dumps(m))
+  assert m == m2
+  assert m.instance is m2.instance
+  assert (m2.instance.a, m2.instance.b) == (1.0, 10.0)
+
+
 def test_multiton_cache_shared_on_first_access():
   """Tests that a second Multiton picks up an already-cached instance."""
   m1 = Multiton(Data, 1.0, b=3.0)
