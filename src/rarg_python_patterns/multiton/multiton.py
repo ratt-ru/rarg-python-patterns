@@ -5,6 +5,7 @@ import itertools
 import math
 import numbers
 import time
+import weakref
 from threading import RLock
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
 
@@ -39,6 +40,14 @@ class Multiton(Generic[T]):
   only finite-TTL tuples and self-compacts to discard stale ones whenever
   it grows much larger than the live cache.
 
+  **Thread safety.** Cache hits acquire only a brief global lock and never
+  block behind factory execution. Constructions are serialised per key:
+  two threads racing on the same key run the factory once, while threads
+  touching other keys proceed unhindered. A factory may freely access
+  *other* multitons' ``instance`` during construction, provided the
+  dependency graph between factories is acyclic — two factories that
+  construct each other from different threads will deadlock.
+
   .. code-block:: python
 
     # Factory function creating a resource
@@ -58,10 +67,18 @@ class Multiton(Generic[T]):
   _EXPIRY_HEAP: ClassVar[List[_HeapEntry]] = []
   _SEQUENCE: ClassVar[itertools.count] = itertools.count()
   _INSTANCE_LOCK: ClassVar[RLock] = RLock()
+  # Per-key construction locks. Values are weakly referenced: a lock lives
+  # exactly as long as some thread is constructing or waiting on its key
+  # (those threads hold strong references), then vanishes — released and
+  # expired entries cannot leak locks.
+  _KEY_LOCKS: ClassVar["weakref.WeakValueDictionary[FrozenKey, Any]"] = (
+    weakref.WeakValueDictionary()
+  )
   # Compact the heap once it exceeds max(_HEAP_COMPACT_MIN,
   # _HEAP_COMPACT_FACTOR * len(cache)) entries, bounding stale/eternal bloat.
   _HEAP_COMPACT_MIN: ClassVar[float] = 32
   _HEAP_COMPACT_FACTOR: ClassVar[float] = 2.0
+  _MISSING_SENTINEL: ClassVar[object] = object()
 
   __slots__ = ("_factory", "_args", "_kw", "_key", "_ttl")
 
@@ -200,19 +217,42 @@ class Multiton(Generic[T]):
 
     Expired cache entries are swept on every call via the heap. Accessing a
     live entry resets its TTL.
+
+    Cache hits hold only the brief global lock. On a miss the factory runs
+    under a per-key lock — without the global lock — so a slow construction
+    blocks only same-key callers, never access to other keys. The per-key
+    lock is re-entrant: a factory may (transitively) access other multitons'
+    ``instance``, as long as factory dependencies are acyclic.
     """
     with self._INSTANCE_LOCK:
       self._purge_expired()
-      entry = self._INSTANCE_CACHE.get(self._key)
 
       # Reset the TTL
-      if entry is not None:
+      if (entry := self._INSTANCE_CACHE.get(self._key)) is not None:
         obj, _, ttl, _ = entry
         self._write_entry(self._key, obj, ttl)
         return obj
 
+      if (key_lock := self._KEY_LOCKS.get(self._key)) is None:
+        key_lock = self._KEY_LOCKS[self._key] = RLock()
+
+    # Construction is serialised per key; the global lock is never held
+    # across factory execution.
+    with key_lock:
+      # Double-check: another thread may have constructed this key while
+      # we waited, and its entry may itself have expired in the meantime.
+      with self._INSTANCE_LOCK:
+        self._purge_expired()
+
+        if (entry := self._INSTANCE_CACHE.get(self._key)) is not None:
+          obj, _, ttl, _ = entry
+          self._write_entry(self._key, obj, ttl)
+          return obj
+
       obj = self._factory(*self._args, **self._kw)
-      self._write_entry(self._key, obj, self._ttl)
+
+      with self._INSTANCE_LOCK:
+        self._write_entry(self._key, obj, self._ttl)
       return obj
 
   def release(self) -> None:
@@ -221,6 +261,10 @@ class Multiton(Generic[T]):
     Any Multiton sharing the same key will recreate the instance on next
     access. The corresponding heap entry is left in place and discarded
     as stale during the next purge sweep.
+
+    A ``release()`` racing an in-flight construction of the same key does
+    not wait for it: it evicts whatever entry currently exists (possibly
+    none) and returns; the construction then publishes its entry as usual.
     """
     with self._INSTANCE_LOCK:
       self._INSTANCE_CACHE.pop(self._key, None)
