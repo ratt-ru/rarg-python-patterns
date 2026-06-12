@@ -100,31 +100,35 @@ def normalise_args(
 ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
   """Normalise the args and keywords used to call a function.
 
-  In particular if keywords are used to pass positional arguments,
-  these keywords are moved into the positional arguments.
+  Binding through :func:`inspect.signature` canonicalises equivalent calls:
+  keywords passing positional parameters move into the positional arguments,
+  and omitted defaults (positional and keyword-only) are filled in. Classes,
+  bound methods, :func:`functools.partial` objects and callable instances are
+  all handled uniformly, with implicit/bound parameters (``self``/``cls``)
+  excluded from binding.
 
   Args:
-    factory: factory function
+    factory: factory callable
     args: positional arguments
     kw: keyword arguments
 
   Returns:
     tuple containing the normalised positional arguments and keyword arguments
+
+  Raises:
+    TypeError: if ``args``/``kw`` are not a valid call to ``factory``. This
+      surfaces at :class:`Multiton` construction rather than at first
+      ``instance`` access.
+
+  Non-introspectable callables (e.g. some builtins) are left un-normalised:
+  their arguments pass through unchanged, giving consistent (if not
+  canonical) cache keys.
   """
-  spec = inspect.getfullargspec(factory)
-  args = list(args)
+  try:
+    sig = inspect.signature(factory)
+  except (TypeError, ValueError):
+    return tuple(args), kw
 
-  # For bound methods (classmethods or instance methods), the first parameter
-  # (cls/self) is already bound and is not part of the effective call signature.
-  param_args = spec.args[1:] if inspect.ismethod(factory) else spec.args
-
-  for i, arg in enumerate(param_args):
-    if i < len(args):
-      continue
-    elif arg in kw:
-      args.append(kw.pop(arg))
-    elif spec.defaults and len(param_args) - len(spec.defaults) <= i:
-      default = spec.defaults[i - (len(param_args) - len(spec.defaults))]
-      args.append(default)
-
-  return tuple(args), kw
+  bound = sig.bind(*args, **kw)
+  bound.apply_defaults()
+  return bound.args, bound.kwargs
