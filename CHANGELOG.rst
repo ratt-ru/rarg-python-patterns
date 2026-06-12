@@ -7,18 +7,15 @@ All notable changes to ``rarg-python-patterns`` are documented in this file.
 The format is based on `Keep a Changelog`_, and this project adheres to
 `Semantic Versioning`_.
 
-Unreleased 0.0.2 (11-MM-YYYY)
+Unreleased X.Y.Z (DD-MM-YYYY)
 =============================
 
 Added
 -----
+- Run factories under per-key locks instead of the global instance lock (:pr:`6`)
 
 Changed
 -------
-- Rename the project from ``rarg-multiton`` to ``rarg-python-patterns`` and
-  restructure it as a patterns collection: the Multiton now lives under the
-  ``rarg_python_patterns.multiton`` subpackage. ``from rarg_python_patterns
-  import Multiton`` continues to work via top-level re-exports (:pr:`5`).
 
 Fixed
 -----
