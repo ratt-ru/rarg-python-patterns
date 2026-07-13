@@ -12,6 +12,21 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 
 Added
 -----
+
+Changed
+-------
+
+Fixed
+-----
+
+Removed
+-------
+
+0.0.4
+=====
+
+Added
+-----
 - Add ``Multiton.with_serialise_instance()``: when enabled, serialising a
   Multiton also serialises the underlying instance (constructing it first if
   necessary) and deserialisation seeds the cache with it, so the factory never
