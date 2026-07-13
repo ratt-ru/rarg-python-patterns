@@ -12,6 +12,10 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 
 Added
 -----
+- Add ``Multiton.with_serialise_instance()``: when enabled, serialising a
+  Multiton also serialises the underlying instance (constructing it first if
+  necessary) and deserialisation seeds the cache with it, so the factory never
+  runs in the receiving process (:pr:`8`)
 
 Changed
 -------
