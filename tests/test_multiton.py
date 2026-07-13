@@ -312,9 +312,13 @@ def test_multiton_nan_ttl_rejected():
 
 def test_multiton_non_numeric_ttl_rejected():
   """A non-real TTL is rejected with a ValueError, not a downstream TypeError."""
-  for bad in (None, "10", 1j):
+  for bad in ("10", 1j):
     with pytest.raises(ValueError, match="real number"):
       Multiton(Data, 1.0, b=3.0).with_args(ttl=bad)
+
+  # None is not rejected: it means "leave the TTL unchanged".
+  m = Multiton(Data, 1.0, b=3.0).with_args(ttl=None)
+  assert m._ttl == Multiton._DEFAULT_TTL
 
 
 def test_multiton_int_ttl_accepted():
@@ -435,3 +439,101 @@ def test_multiton_heap_stale_entries_discarded():
     assert len(Multiton._INSTANCE_CACHE) == 0
     m.instance  # recreates; purge discards the orphaned heap entry(s)
     assert len(Multiton._INSTANCE_CACHE) == 1
+
+
+def counting_factory(a: float, b: float = 3.0) -> Data:
+  """Module-level (pickle-by-reference) factory that counts its invocations."""
+  counting_factory.calls += 1  # type: ignore[attr-defined]
+  return Data(a, b)
+
+
+counting_factory.calls = 0  # type: ignore[attr-defined]
+
+
+def _clear_multiton_state():
+  """Simulate a fresh process by clearing the shared class-level state."""
+  Multiton._INSTANCE_CACHE.clear()
+  Multiton._EXPIRY_HEAP.clear()
+  Multiton._KEY_LOCKS.clear()
+
+
+def test_multiton_serialise_instance_default_and_chaining():
+  """The flag defaults to False and is set via the chaining methods."""
+  m = Multiton(Data, 1.0, b=3.0)
+  assert m._serialise_instance is False
+
+  assert m.with_serialise_instance() is m
+  assert m._serialise_instance is True
+
+  # with_args can toggle it explicitly; omitting it leaves it unchanged.
+  assert m.with_args(serialise_instance=False)._serialise_instance is False
+  assert m.with_args(ttl=10.0)._serialise_instance is False
+
+
+def test_multiton_serialise_instance_excluded_from_identity():
+  """Like the TTL, the flag takes no part in equality or hashing."""
+  m1 = Multiton(Data, 1.0, b=3.0)
+  m2 = Multiton(Data, 1.0, b=3.0).with_serialise_instance()
+  assert m1 == m2
+  assert hash(m1) == hash(m2)
+
+
+def test_multiton_reduce_default_shape():
+  """Without the flag, __reduce__ keeps the original 4-tuple argument shape,
+  so pickles remain loadable by older versions of the library."""
+  m = Multiton(Data, 1.0, b=3.0)
+  _, reduce_args = m.__reduce__()
+  assert len(reduce_args) == 4
+
+
+def test_multiton_serialise_instance_pickle_forces_construction():
+  """Pickling with the flag set constructs the instance if not cached."""
+  m = Multiton(counting_factory, 1.0).with_serialise_instance()
+  start = counting_factory.calls  # type: ignore[attr-defined]
+
+  pickle.dumps(m)
+  assert counting_factory.calls == start + 1  # type: ignore[attr-defined]
+
+  # A second dump reuses the now-cached instance.
+  pickle.dumps(m)
+  assert counting_factory.calls == start + 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("method", [pickle, cloudpickle, dill])
+def test_multiton_serialise_instance_roundtrip(method):
+  """The shipped instance seeds a fresh cache; the factory never re-runs."""
+  m = Multiton(counting_factory, 1.0).with_serialise_instance()
+  payload = method.dumps(m)
+  start = counting_factory.calls  # type: ignore[attr-defined]
+
+  _clear_multiton_state()
+  m2 = method.loads(payload)
+  assert m2._serialise_instance is True
+  # loads() itself seeded the cache, before any .instance access.
+  assert m2._key in Multiton._INSTANCE_CACHE
+  assert m2.instance == Data(1.0, 3.0)
+  assert counting_factory.calls == start  # type: ignore[attr-defined]
+
+
+def test_multiton_serialise_instance_seed_if_absent():
+  """Unpickling never clobbers an already-cached entry for the same key."""
+  m = Multiton(counting_factory, 1.0).with_serialise_instance()
+  payload = pickle.dumps(m)
+
+  existing = m.instance
+  m2 = pickle.loads(payload)
+  assert m2.instance is existing
+
+
+def test_multiton_serialise_instance_ttl_roundtrip():
+  """Flag and TTL survive together; an eternal seeded entry stays eternal."""
+  m = Multiton(Data, 1.0, b=3.0).with_infinite_ttl().with_serialise_instance()
+  payload = pickle.dumps(m)
+
+  _clear_multiton_state()
+  m2 = pickle.loads(payload)
+  assert m2._ttl == math.inf
+  assert m2._serialise_instance is True
+  # Eternal seeded entries are never pushed onto the heap.
+  assert len(Multiton._EXPIRY_HEAP) == 0
+  assert m2.instance == Data(1.0, 3.0)

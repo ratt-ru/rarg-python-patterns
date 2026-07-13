@@ -27,6 +27,17 @@ class Multiton(Generic[T]):
   Multiton's are hashable, equality-comparable and pickleable as long
   as the supplied arguments also support these properties.
 
+  By default only the factory and its arguments are pickled and the
+  receiving process recreates the instance lazily. After
+  ``with_serialise_instance()`` the underlying instance is pickled too:
+  ``__reduce__`` constructs it if it is not already cached, and unpickling
+  seeds the cache with it (unless the key is already cached), so the
+  factory never runs in the receiving process — useful when e.g. a
+  configuration file should be read once and its contents shipped to
+  processes where the file may not exist. The instance itself must then
+  be pickleable, and the seeded entry still expires after ``ttl`` of
+  inactivity, so consider combining with ``with_infinite_ttl()``.
+
   Cached instances expire after ``ttl`` seconds of inactivity. Accessing
   ``instance`` resets the TTL for that entry. All expired entries are
   swept from the cache on every ``instance`` access via a min-heap ordered
@@ -78,9 +89,8 @@ class Multiton(Generic[T]):
   # _HEAP_COMPACT_FACTOR * len(cache)) entries, bounding stale/eternal bloat.
   _HEAP_COMPACT_MIN: ClassVar[float] = 32
   _HEAP_COMPACT_FACTOR: ClassVar[float] = 2.0
-  _MISSING_SENTINEL: ClassVar[object] = object()
 
-  __slots__ = ("_factory", "_args", "_kw", "_key", "_ttl")
+  __slots__ = ("_factory", "_args", "_kw", "_key", "_ttl", "_serialise_instance")
 
   # Instance variables
   _factory: Callable[..., T]
@@ -88,6 +98,7 @@ class Multiton(Generic[T]):
   _kw: Dict[str, Any]
   _key: FrozenKey
   _ttl: float
+  _serialise_instance: bool
 
   def __init__(self, factory: Callable[..., T], *args, **kw):
     """Create a Multiton with the factory function and arguments
@@ -102,9 +113,14 @@ class Multiton(Generic[T]):
     self._args, self._kw = normalise_args(factory, args, kw)
     self._key = FrozenKey(factory, *self._args, **self._kw)
     self._ttl = self._DEFAULT_TTL
+    self._serialise_instance = False
 
-  def with_args(self, *, ttl: float) -> Multiton[T]:
+  def with_args(
+    self, *, ttl: float | None = None, serialise_instance: bool | None = None
+  ) -> Multiton[T]:
     """Set per-instance cache options and return ``self`` for chaining.
+
+    Options left at ``None`` are unchanged.
 
     Arguments:
       ttl: Time-to-live in seconds for the cached instance. Accessing
@@ -113,10 +129,20 @@ class Multiton(Generic[T]):
         is not changed. ``math.inf`` makes the entry eternal. Must be a real
         number; ``nan`` is rejected, as it would never satisfy the expiry
         comparison and would leak in the heap.
+      serialise_instance: When true, pickling this Multiton also pickles
+        the underlying instance — constructing it first if necessary — and
+        unpickling seeds the cache with it (only if the key is not already
+        cached), so the factory never runs in the receiving process. The
+        instance itself must then be pickleable. The seeded entry still
+        expires after ``ttl`` of inactivity; combine with
+        ``with_infinite_ttl()`` if the factory cannot run remotely.
     """
-    if not isinstance(ttl, numbers.Real) or math.isnan(ttl):
-      raise ValueError(f"ttl must be a real number, not nan (got {ttl!r})")
-    self._ttl = ttl
+    if ttl is not None:
+      if not isinstance(ttl, numbers.Real) or math.isnan(ttl):
+        raise ValueError(f"ttl must be a real number, not nan (got {ttl!r})")
+      self._ttl = ttl
+    if serialise_instance is not None:
+      self._serialise_instance = bool(serialise_instance)
     return self
 
   def with_ttl(self, ttl: float) -> Multiton[T]:
@@ -136,12 +162,46 @@ class Multiton(Generic[T]):
     """
     return self.with_args(ttl=math.inf)
 
+  def with_serialise_instance(self) -> Multiton[T]:
+    """Pickle the underlying instance along with this Multiton.
+
+    Shorthand for ``with_args(serialise_instance=True)``; returns ``self``
+    for chaining. See :meth:`with_args` for the full semantics.
+    """
+    return self.with_args(serialise_instance=True)
+
   @staticmethod
-  def from_reduce_args(factory: Callable[..., T], args, kw, ttl: float) -> Multiton[T]:
-    """Helper method for reconstructing a Multiton from arg and kw objects"""
-    return Multiton[T](factory, *args, **kw).with_args(ttl=ttl)
+  def from_reduce_args(
+    factory: Callable[..., T],
+    args,
+    kw,
+    ttl: float,
+    serialise_instance: bool = False,
+    instance: Any = None,
+  ) -> Multiton[T]:
+    """Helper method for reconstructing a Multiton from arg and kw objects.
+
+    When ``serialise_instance`` is true, ``instance`` is the materialised
+    object shipped in the pickle; it seeds the cache unless the key is
+    already cached (mirroring the first-write TTL semantics)."""
+    multiton = Multiton[T](factory, *args, **kw).with_args(
+      ttl=ttl, serialise_instance=serialise_instance
+    )
+    if serialise_instance:
+      with Multiton._INSTANCE_LOCK:
+        Multiton._purge_expired()
+        if multiton._key not in Multiton._INSTANCE_CACHE:
+          Multiton._write_entry(multiton._key, instance, ttl)
+    return multiton
 
   def __reduce__(self) -> Tuple[Callable, Tuple[Any, ...]]:
+    if self._serialise_instance:
+      # Forces construction if the instance is not currently cached, so the
+      # pickle always carries a materialised instance.
+      return (
+        Multiton.from_reduce_args,
+        (self._factory, self._args, self._kw, self._ttl, True, self.instance),
+      )
     return (Multiton.from_reduce_args, (self._factory, self._args, self._kw, self._ttl))
 
   def __hash__(self) -> int:
