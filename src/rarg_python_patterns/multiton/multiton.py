@@ -6,8 +6,19 @@ import math
 import numbers
 import time
 import weakref
+from contextlib import contextmanager
 from threading import RLock
-from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
+from typing import (
+  Any,
+  Callable,
+  ClassVar,
+  Dict,
+  Generic,
+  Iterator,
+  List,
+  Tuple,
+  TypeVar,
+)
 
 from rarg_python_patterns.multiton.canonicalisation import FrozenKey, normalise_args
 
@@ -51,6 +62,16 @@ class Multiton(Generic[T]):
   only finite-TTL tuples and self-compacts to discard stale ones whenever
   it grows much larger than the live cache.
 
+  **Holds.** ``acquire()`` registers a hold on the entry and returns the
+  instance; ``release()`` drops a hold, evicting the entry only once the
+  last holder lets go. Holds are counted per key, so unrelated components
+  sharing a key cannot evict the instance from underneath one another — the
+  cost of recreating it is only paid when nobody is using it any more. A
+  held entry does not expire, however long it is held, so prefer the
+  ``hold()`` context manager, which pairs the two automatically. For
+  backwards compatibility a ``release()`` with no outstanding hold evicts
+  the entry immediately, as it always has.
+
   **Thread safety.** Cache hits acquire only a brief global lock and never
   block behind factory execution. Constructions are serialised per key:
   two threads racing on the same key run the factory once, while threads
@@ -77,6 +98,9 @@ class Multiton(Generic[T]):
   _INSTANCE_CACHE: ClassVar[Dict[FrozenKey, _CacheEntry]] = {}
   _EXPIRY_HEAP: ClassVar[List[_HeapEntry]] = []
   _SEQUENCE: ClassVar[itertools.count] = itertools.count()
+  # Outstanding holds per key, registered by acquire() and dropped by
+  # release(). A key is absent when unheld; entries are never zero-valued.
+  _HOLD_COUNTS: ClassVar[Dict[FrozenKey, int]] = {}
   _INSTANCE_LOCK: ClassVar[RLock] = RLock()
   # Per-key construction locks. Values are weakly referenced: a lock lives
   # exactly as long as some thread is constructing or waiting on its key
@@ -90,7 +114,15 @@ class Multiton(Generic[T]):
   _HEAP_COMPACT_MIN: ClassVar[float] = 32
   _HEAP_COMPACT_FACTOR: ClassVar[float] = 2.0
 
-  __slots__ = ("_factory", "_args", "_kw", "_key", "_ttl", "_serialise_instance")
+  __slots__ = (
+    "_factory",
+    "_args",
+    "_kw",
+    "_key",
+    "_ttl",
+    "_serialise_instance",
+    "_holds",
+  )
 
   # Instance variables
   _factory: Callable[..., T]
@@ -99,6 +131,7 @@ class Multiton(Generic[T]):
   _key: FrozenKey
   _ttl: float
   _serialise_instance: bool
+  _holds: int
 
   def __init__(self, factory: Callable[..., T], *args, **kw):
     """Create a Multiton with the factory function and arguments
@@ -114,6 +147,7 @@ class Multiton(Generic[T]):
     self._key = FrozenKey(factory, *self._args, **self._kw)
     self._ttl = self._DEFAULT_TTL
     self._serialise_instance = False
+    self._holds = 0
 
   def with_args(
     self, *, ttl: float | None = None, serialise_instance: bool | None = None
@@ -315,19 +349,117 @@ class Multiton(Generic[T]):
         self._write_entry(self._key, obj, self._ttl)
       return obj
 
+  def acquire(self) -> T:
+    """Register a hold on this Multiton's instance and return it.
+
+    The instance is created if necessary, exactly as ``instance`` does.
+    While at least one hold is outstanding the entry is pinned: it does not
+    expire, and a ``release()`` by another holder will not evict it. The
+    entry is evicted when the last holder calls :meth:`release`.
+
+    Holds are counted per key, not per Multiton object: two Multitons with
+    equal factories and arguments hold the same entry, and each must
+    release it.
+
+    A held entry never expires, so every ``acquire()`` needs a matching
+    ``release()``; :meth:`hold` pairs them for you.
+    """
+    # Construct (or fetch) outside the pinning critical section: the factory
+    # must not run under the global lock.
+    obj = self.instance
+
+    with self._INSTANCE_LOCK:
+      self._HOLD_COUNTS[self._key] = self._HOLD_COUNTS.get(self._key, 0) + 1
+      self._holds += 1
+
+      # Pin the entry by making it eternal. The instance access above may
+      # have raced an eviction, in which case obj re-seeds the cache; where
+      # an entry does exist it wins, so that every holder of a key observes
+      # the same object.
+      if (entry := self._INSTANCE_CACHE.get(self._key)) is None:
+        self._write_entry(self._key, obj, math.inf)
+      else:
+        obj = entry[0]
+
+        if not math.isinf(entry[2]):
+          self._write_entry(self._key, obj, math.inf)
+
+      return obj
+
+  @contextmanager
+  def hold(self) -> Iterator[T]:
+    """Context manager yielding the instance, held for the duration.
+
+    Equivalent to an :meth:`acquire` paired with a :meth:`release` in a
+    ``finally`` block.
+
+    .. code-block:: python
+
+      with resource.hold() as connection:
+        connection.request("GET", "/foo/bar.html")
+    """
+    obj = self.acquire()
+
+    try:
+      yield obj
+    finally:
+      self.release()
+
+  @property
+  def hold_count(self) -> int:
+    """The number of outstanding holds on this Multiton's key."""
+    with self._INSTANCE_LOCK:
+      return self._HOLD_COUNTS.get(self._key, 0)
+
   def release(self) -> None:
-    """Immediately evict this Multiton's instance from the cache.
+    """Drop a hold on this Multiton's instance, evicting it from the cache
+    when the last holder releases it.
+
+    This Multiton's own holds are dropped first. A ``release()`` from a
+    Multiton that never acquired evicts the entry immediately when nothing
+    holds it — the pre-holds contract, under which a caller that never
+    acquired is by definition the only user — and is a no-op while another
+    holder is using it.
 
     Any Multiton sharing the same key will recreate the instance on next
-    access. The corresponding heap entry is left in place and discarded
-    as stale during the next purge sweep.
+    access after eviction. The corresponding heap entry is left in place
+    and discarded as stale during the next purge sweep.
 
     A ``release()`` racing an in-flight construction of the same key does
     not wait for it: it evicts whatever entry currently exists (possibly
     none) and returns; the construction then publishes its entry as usual.
     """
     with self._INSTANCE_LOCK:
+      count = self._HOLD_COUNTS.get(self._key, 0)
+
+      if self._holds > 0:
+        # Drop this Multiton's own hold; the entry goes when the last one does
+        self._holds -= 1
+
+        if count > 1:
+          self._HOLD_COUNTS[self._key] = count - 1
+          return
+
+        self._HOLD_COUNTS.pop(self._key, None)
+      elif count > 0:
+        # Somebody else is holding the entry: their hold outranks this
+        # eviction request, and they will evict it when they are done.
+        return
+
       self._INSTANCE_CACHE.pop(self._key, None)
+
+  @classmethod
+  def clear_cache(cls) -> None:
+    """Discard all cached instances, holds and construction locks.
+
+    Intended for test teardown; holds are dropped without consulting their
+    holders.
+    """
+    with cls._INSTANCE_LOCK:
+      cls._INSTANCE_CACHE.clear()
+      cls._EXPIRY_HEAP.clear()
+      cls._HOLD_COUNTS.clear()
+      cls._KEY_LOCKS.clear()
 
   def __str__(self) -> str:
     return f"Multiton({self._factory})"
