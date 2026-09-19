@@ -18,6 +18,13 @@ Cached instances expire after `ttl` seconds of inactivity; accessing
 `.instance` resets the TTL. Expired entries are swept on every access via a
 min-heap ordered by expiry time.
 
+A component that depends on an instance for longer than a single access can
+*hold* it. `acquire()` registers a hold and returns the instance, `release()`
+drops one, and the entry is evicted only once the last holder lets go — so
+components sharing a key cannot discard an expensive instance from underneath
+one another. A held entry never expires, so prefer the `hold()` context
+manager, which pairs the two.
+
 ```python
 from rarg_python_patterns import Multiton
 
@@ -32,6 +39,11 @@ response = resource.instance.request("GET", "/foo/bar.html")
 
 # Override the default TTL (300s) per-instance.
 resource = Multiton(open_connection, "https://www.python.org").with_args(ttl=60.0)
+
+# Hold the instance for as long as it is needed: neither expiry nor another
+# component's release() can evict it while the block runs.
+with resource.hold() as connection:
+    connection.request("GET", "/foo/bar.html")
 ```
 
 ## Installation

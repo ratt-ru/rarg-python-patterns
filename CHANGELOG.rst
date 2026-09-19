@@ -12,9 +12,20 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 
 Added
 -----
+- Add refcounted holds on cached instances. ``Multiton.acquire()`` registers a
+  hold and returns the instance, ``Multiton.release()`` drops one, and the
+  entry is evicted only when the last holder releases it. A held entry does
+  not expire; ``Multiton.hold()`` is a context manager pairing the two, and
+  ``Multiton.hold_count`` reports the outstanding holds on a key.
+- Add ``Multiton.clear_cache()``, discarding all cached instances, holds and
+  construction locks in one call (intended for test teardown).
 
 Changed
 -------
+- ``Multiton.release()`` now drops the calling Multiton's own hold, if it has
+  one, instead of always evicting. A ``release()`` from a Multiton that never
+  acquired still evicts immediately when nothing holds the entry, but is a
+  no-op while another holder is using it.
 
 Fixed
 -----
