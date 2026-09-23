@@ -12,6 +12,7 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 
 Added
 -----
+- Freeze Multitons using their internal FrozenKey (:pr:`10`)
 
 Changed
 -------
