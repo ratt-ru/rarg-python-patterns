@@ -1,5 +1,7 @@
+import gc
 import math
 import pickle
+import weakref
 from dataclasses import dataclass
 from unittest.mock import patch
 
@@ -7,7 +9,7 @@ import cloudpickle
 import dill
 import pytest
 
-from rarg_python_patterns import Multiton
+from rarg_python_patterns import Multiton, freeze
 
 
 @dataclass
@@ -537,3 +539,37 @@ def test_multiton_serialise_instance_ttl_roundtrip():
   # Eternal seeded entries are never pushed onto the heap.
   assert len(Multiton._EXPIRY_HEAP) == 0
   assert m2.instance == Data(1.0, 3.0)
+
+
+def test_multiton_freezes_to_key():
+  """A Multiton factory argument is frozen to its key, not to itself.
+
+  The child's cache key must identify the parent by value while holding no
+  strong reference to it, so a cached child cannot keep its parent alive.
+  """
+
+  def child_factory(parent: Multiton[Data]) -> Data:
+    return Data(parent.instance.a * 2, parent.instance.b * 2)
+
+  class WeakMultiton(Multiton[Data]):
+    """Multiton's __slots__ exclude __weakref__; a subclass restores it."""
+
+  parent = WeakMultiton(Data, 1.0, b=3.0)
+  assert freeze(parent) is parent._key
+
+  child = Multiton(child_factory, parent)
+  assert parent._key in child._key.frozen
+  assert all(v is not parent for v in child._key.frozen)
+
+  # An equivalent parent yields an equal child key
+  assert Multiton(child_factory, Multiton(Data, 1.0, 3.0)) == child
+
+  assert child.instance == Data(2.0, 6.0)
+  child_key = child._key
+  parent_ref = weakref.ref(parent)
+  del parent, child
+  gc.collect()
+
+  # The parent is collectable while the child remains cached
+  assert parent_ref() is None
+  assert child_key in Multiton._INSTANCE_CACHE
