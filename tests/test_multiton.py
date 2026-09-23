@@ -573,3 +573,92 @@ def test_multiton_freezes_to_key():
   # The parent is collectable while the child remains cached
   assert parent_ref() is None
   assert child_key in Multiton._INSTANCE_CACHE
+
+
+class Base:
+  pass
+
+
+class Derived(Base):
+  pass
+
+
+class Other:
+  pass
+
+
+def test_clear_cache_all():
+  """clear_cache() evicts every entry, eternal ones included, and the heap"""
+  finite = Multiton(Base)
+  eternal = Multiton(Other).with_infinite_ttl()
+  old_finite, old_eternal = finite.instance, eternal.instance
+
+  Multiton.clear_cache()
+  assert not Multiton._INSTANCE_CACHE
+  assert not Multiton._EXPIRY_HEAP
+
+  assert finite.instance is not old_finite
+  assert eternal.instance is not old_eternal
+
+
+def test_clear_cache_by_type():
+  """Only entries whose instance matches the type are evicted"""
+  base, other = Multiton(Base), Multiton(Other)
+  old_base, old_other = base.instance, other.instance
+
+  Multiton.clear_cache(Base)
+
+  assert base.instance is not old_base
+  assert other.instance is old_other
+
+
+def test_clear_cache_matches_subclasses():
+  """isinstance semantics: clearing a base type also evicts subclasses"""
+  derived, other = Multiton(Derived), Multiton(Other)
+  old_derived, old_other = derived.instance, other.instance
+
+  Multiton.clear_cache(Base)
+
+  assert derived.instance is not old_derived
+  assert other.instance is old_other
+
+
+@pytest.mark.parametrize("instance_type", [(Base, Other), Base | Other])
+def test_clear_cache_tuple_and_union(instance_type):
+  """Tuples of types and unions are both accepted"""
+  base, other, data = Multiton(Base), Multiton(Other), Multiton(Data, 1.0, 2.0)
+  old_base, old_other, old_data = base.instance, other.instance, data.instance
+
+  Multiton.clear_cache(instance_type)
+
+  assert base.instance is not old_base
+  assert other.instance is not old_other
+  assert data.instance is old_data
+
+
+def test_clear_cache_no_match():
+  """A type matching nothing leaves the cache untouched"""
+  m = Multiton(Base)
+  old = m.instance
+
+  Multiton.clear_cache(Other)
+
+  assert m.instance is old
+
+
+def test_clear_cache_stale_heap_entry_ignored():
+  """A recreated key survives expiry of the heap entry left by clear_cache"""
+  m = Multiton(Base).with_ttl(10.0)
+  now = 1000.0
+  with patch("rarg_python_patterns.multiton.multiton.time.monotonic") as mono:
+    mono.return_value = now
+    m.instance
+    Multiton.clear_cache(Base)
+    assert len(Multiton._EXPIRY_HEAP) == 1  # stale entry left behind
+
+    mono.return_value = now + 5.0
+    recreated = m.instance
+
+    # The stale entry's deadline passes, but the recreated entry is live
+    mono.return_value = now + 12.0
+    assert m.instance is recreated
