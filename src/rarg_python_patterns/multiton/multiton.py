@@ -9,7 +9,11 @@ import weakref
 from threading import RLock
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
 
-from rarg_python_patterns.multiton.canonicalisation import FrozenKey, normalise_args
+from rarg_python_patterns.multiton.canonicalisation import (
+  FrozenKey,
+  normalise_args,
+  register_freezer,
+)
 
 T = TypeVar("T")
 
@@ -333,3 +337,16 @@ class Multiton(Generic[T]):
     return f"Multiton({self._factory})"
 
   __repr__ = __str__
+
+
+@register_freezer(Multiton)
+def _freeze_multiton(arg: Multiton) -> FrozenKey:
+  """Represent a multiton handle by its own key.
+
+  Multitons are routinely passed as factory arguments to other
+  multitons. Freezing the handle to itself would put a strong reference
+  to the parent in the child's cache key, keeping the parent alive for
+  as long as the child is cached.
+  The key alone identifies the parent just as precisely and holds nothing open.
+  """
+  return arg._key
