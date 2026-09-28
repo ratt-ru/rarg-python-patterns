@@ -13,6 +13,8 @@ Unreleased X.Y.Z (DD-MM-YYYY)
 Added
 -----
 - Freeze Multitons using their internal FrozenKey (:pr:`10`)
+- Add ``Multiton.clear_cache`` to evict all cached instances, or only those
+  matching an instance type and/or a ``where(instance)`` predicate
 
 Changed
 -------

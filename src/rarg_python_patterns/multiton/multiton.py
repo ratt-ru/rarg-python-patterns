@@ -7,6 +7,7 @@ import numbers
 import time
 import weakref
 from threading import RLock
+from types import UnionType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Tuple, TypeVar
 
 from rarg_python_patterns.multiton.canonicalisation import (
@@ -49,11 +50,11 @@ class Multiton(Generic[T]):
 
   A ``ttl`` of ``math.inf`` (set via ``with_ttl(math.inf)`` or the
   ``with_infinite_ttl()`` shorthand) makes an entry eternal: it never
-  expires and is only removed by ``release()``. Eternal entries are never
-  pushed onto the heap (an ``inf`` deadline could never satisfy the sweep
-  condition anyway), so they cost nothing in heap space. The heap holds
-  only finite-TTL tuples and self-compacts to discard stale ones whenever
-  it grows much larger than the live cache.
+  expires and is only removed by ``release()`` or ``clear_cache()``.
+  Eternal entries are never pushed onto the heap (an ``inf`` deadline could
+  never satisfy the sweep condition anyway), so they cost nothing in heap
+  space. The heap holds only finite-TTL tuples and self-compacts to discard
+  stale ones whenever it grows much larger than the live cache.
 
   **Thread safety.** Cache hits acquire only a brief global lock and never
   block behind factory execution. Constructions are serialised per key:
@@ -154,7 +155,8 @@ class Multiton(Generic[T]):
 
     Arguments:
       ttl: Time-to-live in seconds for the cached instance. ``math.inf``
-        makes the entry eternal (never expires; only removed by ``release()``).
+        makes the entry eternal (never expires; only removed by ``release()``
+        or ``clear_cache()``).
         See :meth:`with_args` for the TTL-reset and first-write semantics.
     """
     return self.with_args(ttl=ttl)
@@ -332,6 +334,56 @@ class Multiton(Generic[T]):
     """
     with self._INSTANCE_LOCK:
       self._INSTANCE_CACHE.pop(self._key, None)
+
+  @classmethod
+  def clear_cache(
+    cls,
+    instance_type: type | tuple[type, ...] | UnionType | None = None,
+    *,
+    where: Callable[[Any], bool] | None = None,
+  ) -> int:
+    """Evict cached instances, optionally only those matching filters.
+
+    An entry is evicted only if it matches every filter supplied. With no
+    filters the entire cache is cleared, including eternal (``math.inf``
+    TTL) entries.
+
+    Arguments:
+      instance_type: Match entries whose cached instance satisfies
+        ``isinstance(instance, instance_type)``: a type, a tuple of types or
+        a union such as ``int | str``. Subclass instances therefore match
+        too. Matching is on the object the factory returned, not on the
+        factory itself.
+      where: Match entries for which ``where(instance)`` is true, e.g. to
+        evict only instances tied to a particular resource. It is called
+        under the global cache lock, so it must be quick and must not
+        access any Multiton's ``instance``.
+
+    Returns:
+      The number of entries evicted.
+
+    Evicted keys are recreated on next access. Like ``release()``, this does
+    not wait for in-flight constructions: an entry being constructed when
+    ``clear_cache`` runs is published afterwards as usual.
+    """
+    with cls._INSTANCE_LOCK:
+      if instance_type is None and where is None:
+        # Every heap entry is now stale, so drop them all at once
+        n = len(cls._INSTANCE_CACHE)
+        cls._INSTANCE_CACHE.clear()
+        cls._EXPIRY_HEAP.clear()
+        return n
+
+      # Remaining heap entries are discarded as stale during the next purge
+      keys = [
+        k
+        for k, (obj, *_) in cls._INSTANCE_CACHE.items()
+        if (instance_type is None or isinstance(obj, instance_type))
+        and (where is None or where(obj))
+      ]
+      for k in keys:
+        del cls._INSTANCE_CACHE[k]
+      return len(keys)
 
   def __str__(self) -> str:
     return f"Multiton({self._factory})"
