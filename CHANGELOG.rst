@@ -14,7 +14,8 @@ Added
 -----
 - Freeze Multitons using their internal FrozenKey (:pr:`10`)
 - Add ``Multiton.clear_cache`` to evict all cached instances, or only those
-  of a given type
+  matching an instance type and/or a ``where(key, instance)`` predicate
+- Add ``FrozenKey.factory``, ``FrozenKey.args`` and ``FrozenKey.kwargs``
 
 Changed
 -------

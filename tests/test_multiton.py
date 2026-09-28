@@ -662,3 +662,84 @@ def test_clear_cache_stale_heap_entry_ignored():
     # The stale entry's deadline passes, but the recreated entry is live
     mono.return_value = now + 12.0
     assert m.instance is recreated
+
+
+def test_clear_cache_returns_count():
+  """clear_cache reports how many entries it evicted"""
+  Multiton(Base).instance
+  Multiton(Other).instance
+  Multiton(Data, 1.0, 2.0).instance
+
+  assert Multiton.clear_cache(Base | Other) == 2
+  assert Multiton.clear_cache(Base) == 0
+  assert Multiton.clear_cache() == 1
+
+
+def test_clear_cache_where():
+  """where filters on the key; combined with instance_type it is an AND"""
+  d1, d2 = Multiton(Data, 1.0, 2.0), Multiton(Data, 3.0, 4.0)
+  other = Multiton(Other)
+  old_d1, old_d2, old_other = d1.instance, d2.instance, other.instance
+
+  def first_arg_is_one(key, _):
+    return key.factory is Data and key.args[0] == 1.0
+
+  assert Multiton.clear_cache(Other, where=first_arg_is_one) == 0
+  assert Multiton.clear_cache(where=first_arg_is_one) == 1
+
+  assert d1.instance is not old_d1
+  assert d2.instance is old_d2
+  assert other.instance is old_other
+
+
+class _Table:
+  def __init__(self, name):
+    self.name = name
+
+
+class _Structure:
+  def __init__(self, table, subtables):
+    self.table = table.instance.name
+    self.subtables = {k: v.instance.name for k, v in subtables.items()}
+
+
+def test_clear_cache_where_per_dataset():
+  """Evict one dataset's tables while keeping its structure and other datasets.
+
+  Mirrors how xarray-ms keys its main table, subtables and structure.
+  """
+  calls = {"table": 0, "structure": 0}
+
+  def open_table(name):
+    calls["table"] += 1
+    return _Table(name)
+
+  def build_structure(table, subtables):
+    calls["structure"] += 1
+    return _Structure(table, subtables)
+
+  def make(ms):
+    table = Multiton(open_table, ms)
+    subtables = {"ANT": Multiton(open_table, f"{ms}::ANT")}
+    return table, subtables, Multiton(build_structure, table, subtables)
+
+  a_table, a_subtables, a_structure = make("a.ms")
+  b_table, b_subtables, b_structure = make("b.ms")
+  a_structure.instance, b_structure.instance
+  old_a, old_b = a_table.instance, b_table.instance
+  assert calls == {"table": 4, "structure": 2}
+
+  def a_tables(key, _):
+    return key.factory is open_table and (
+      key.args[0] == "a.ms" or key.args[0].startswith("a.ms::")
+    )
+
+  assert Multiton.clear_cache(where=a_tables) == 2
+
+  # Structures survive; only a.ms's tables reopen
+  a_structure.instance, b_structure.instance
+  assert calls == {"table": 4, "structure": 2}
+  assert a_table.instance is not old_a
+  assert a_subtables["ANT"].instance.name == "a.ms::ANT"
+  assert b_table.instance is old_b
+  assert calls == {"table": 6, "structure": 2}

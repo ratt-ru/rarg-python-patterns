@@ -127,3 +127,30 @@ def test_normalise_args_non_introspectable_passthrough():
   """Callables without a retrievable signature pass arguments through."""
   args, kw = normalise_args(dict, (), {"a": 1})
   assert (args, kw) == ((), {"a": 1})
+
+
+def test_frozen_key_accessors():
+  """factory, args and kwargs expose the parts of a Multiton-style key"""
+
+  def f(a, b=2, *, c=3):
+    pass
+
+  key = FrozenKey(f, *normalise_args(f, (1,), {"b": [4, 5]})[0], c=6)
+  assert key.factory is f
+  assert key.args == (1, (4, 5))
+  assert key.kwargs == {"c": 6}
+
+
+def test_frozen_key_accessors_bound_method():
+  """Bound-method factories compare equal across separate lookups"""
+
+  class T:
+    @classmethod
+    def open(cls, name, readonly=True):
+      pass
+
+  args, kw = normalise_args(T.open, ("a.ms",), {"readonly": False})
+  key = FrozenKey(T.open, *args, **kw)
+  assert key.factory == T.open
+  assert key.args == ("a.ms", False)
+  assert key.kwargs == {}

@@ -53,9 +53,8 @@ class Multiton(Generic[T]):
   expires and is only removed by ``release()`` or ``clear_cache()``.
   Eternal entries are never pushed onto the heap (an ``inf`` deadline could
   never satisfy the sweep condition anyway), so they cost nothing in heap
-  space. The heap holds
-  only finite-TTL tuples and self-compacts to discard stale ones whenever
-  it grows much larger than the live cache.
+  space. The heap holds only finite-TTL tuples and self-compacts to discard
+  stale ones whenever it grows much larger than the live cache.
 
   **Thread safety.** Cache hits acquire only a brief global lock and never
   block behind factory execution. Constructions are serialised per key:
@@ -338,37 +337,54 @@ class Multiton(Generic[T]):
 
   @classmethod
   def clear_cache(
-    cls, instance_type: type | tuple[type, ...] | UnionType | None = None
-  ) -> None:
-    """Evict cached instances, optionally only those of a given type.
+    cls,
+    instance_type: type | tuple[type, ...] | UnionType | None = None,
+    *,
+    where: Callable[[FrozenKey, Any], bool] | None = None,
+  ) -> int:
+    """Evict cached instances, optionally only those matching filters.
+
+    An entry is evicted only if it matches every filter supplied. With no
+    filters the entire cache is cleared, including eternal (``math.inf``
+    TTL) entries.
 
     Arguments:
-      instance_type: Evict entries whose cached instance satisfies
+      instance_type: Match entries whose cached instance satisfies
         ``isinstance(instance, instance_type)``: a type, a tuple of types or
         a union such as ``int | str``. Subclass instances therefore match
         too. Matching is on the object the factory returned, not on the
-        factory itself. If ``None``, the entire cache is cleared, including
-        eternal (``math.inf`` TTL) entries.
+        factory itself.
+      where: Match entries for which ``where(key, instance)`` is true.
+        ``key`` is the entry's :class:`FrozenKey`, whose ``factory``,
+        ``args`` and ``kwargs`` identify what created it. It is called
+        under the global cache lock, so it must be quick and must not
+        access any Multiton's ``instance``.
+
+    Returns:
+      The number of entries evicted.
 
     Evicted keys are recreated on next access. Like ``release()``, this does
     not wait for in-flight constructions: an entry being constructed when
     ``clear_cache`` runs is published afterwards as usual.
     """
     with cls._INSTANCE_LOCK:
-      if instance_type is None:
+      if instance_type is None and where is None:
         # Every heap entry is now stale, so drop them all at once
+        n = len(cls._INSTANCE_CACHE)
         cls._INSTANCE_CACHE.clear()
         cls._EXPIRY_HEAP.clear()
-        return
+        return n
 
       # Remaining heap entries are discarded as stale during the next purge
       keys = [
         k
         for k, (obj, *_) in cls._INSTANCE_CACHE.items()
-        if isinstance(obj, instance_type)
+        if (instance_type is None or isinstance(obj, instance_type))
+        and (where is None or where(k, obj))
       ]
       for k in keys:
         del cls._INSTANCE_CACHE[k]
+      return len(keys)
 
   def __str__(self) -> str:
     return f"Multiton({self._factory})"
