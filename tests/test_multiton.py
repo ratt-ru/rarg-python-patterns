@@ -676,13 +676,13 @@ def test_clear_cache_returns_count():
 
 
 def test_clear_cache_where():
-  """where filters on the key; combined with instance_type it is an AND"""
+  """where filters on the instance; combined with instance_type it is an AND"""
   d1, d2 = Multiton(Data, 1.0, 2.0), Multiton(Data, 3.0, 4.0)
   other = Multiton(Other)
   old_d1, old_d2, old_other = d1.instance, d2.instance, other.instance
 
-  def first_arg_is_one(key, _):
-    return key.factory is Data and key.args[0] == 1.0
+  def first_arg_is_one(obj):
+    return isinstance(obj, Data) and obj.a == 1.0
 
   assert Multiton.clear_cache(Other, where=first_arg_is_one) == 0
   assert Multiton.clear_cache(where=first_arg_is_one) == 1
@@ -729,10 +729,8 @@ def test_clear_cache_where_per_dataset():
   old_a, old_b = a_table.instance, b_table.instance
   assert calls == {"table": 4, "structure": 2}
 
-  def a_tables(key, _):
-    return key.factory is open_table and (
-      key.args[0] == "a.ms" or key.args[0].startswith("a.ms::")
-    )
+  def a_tables(obj):
+    return isinstance(obj, _Table) and obj.name.partition("::")[0] == "a.ms"
 
   assert Multiton.clear_cache(where=a_tables) == 2
 

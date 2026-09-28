@@ -81,28 +81,6 @@ class FrozenKey(Hashable):
   def frozen(self) -> Tuple[Any, ...]:
     return self._frozen
 
-  @property
-  def factory(self) -> Any:
-    """The frozen factory: the first positional argument of a Multiton key."""
-    return self._frozen[0]
-
-  @property
-  def args(self) -> Tuple[Any, ...]:
-    """The frozen positional arguments following the factory.
-
-    Multiton keys are built from :func:`normalise_args` output, so
-    parameters that can be passed positionally always appear here, even if
-    the caller supplied them as keywords.
-    """
-    return self._frozen[1:-1]
-
-  @property
-  def kwargs(self) -> Dict[str, Any]:
-    """The frozen keyword arguments, as a new ``dict``.
-
-    For Multiton keys these are the keyword-only parameters."""
-    return dict(self._frozen[-1])
-
   def __hash__(self) -> int:
     return self._hashvalue
 

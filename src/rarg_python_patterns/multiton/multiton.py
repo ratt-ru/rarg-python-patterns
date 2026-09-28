@@ -340,7 +340,7 @@ class Multiton(Generic[T]):
     cls,
     instance_type: type | tuple[type, ...] | UnionType | None = None,
     *,
-    where: Callable[[FrozenKey, Any], bool] | None = None,
+    where: Callable[[Any], bool] | None = None,
   ) -> int:
     """Evict cached instances, optionally only those matching filters.
 
@@ -354,9 +354,8 @@ class Multiton(Generic[T]):
         a union such as ``int | str``. Subclass instances therefore match
         too. Matching is on the object the factory returned, not on the
         factory itself.
-      where: Match entries for which ``where(key, instance)`` is true.
-        ``key`` is the entry's :class:`FrozenKey`, whose ``factory``,
-        ``args`` and ``kwargs`` identify what created it. It is called
+      where: Match entries for which ``where(instance)`` is true, e.g. to
+        evict only instances tied to a particular resource. It is called
         under the global cache lock, so it must be quick and must not
         access any Multiton's ``instance``.
 
@@ -380,7 +379,7 @@ class Multiton(Generic[T]):
         k
         for k, (obj, *_) in cls._INSTANCE_CACHE.items()
         if (instance_type is None or isinstance(obj, instance_type))
-        and (where is None or where(k, obj))
+        and (where is None or where(obj))
       ]
       for k in keys:
         del cls._INSTANCE_CACHE[k]
