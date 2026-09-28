@@ -10,6 +10,9 @@ The format is based on `Keep a Changelog`_, and this project adheres to
 Unreleased X.Y.Z (DD-MM-YYYY)
 =============================
 
+0.0.5 (28-08-2026)
+==================
+
 Added
 -----
 - Freeze Multitons using their internal FrozenKey (:pr:`10`)
@@ -25,8 +28,8 @@ Fixed
 Removed
 -------
 
-0.0.4
-=====
+0.0.4 (13-07-2026)
+==================
 
 Added
 -----
@@ -45,16 +48,16 @@ Removed
 -------
 
 
-0.0.3
-=====
+0.0.3 (12-06-2026)
+==================
 
 Added
 -----
 - Normalise factory args via inspect.signature, fixing class factories (:pr:`7`)
 - Run factories under per-key locks instead of the global instance lock (:pr:`6`)
 
-0.0.2
-=====
+0.0.2 (11-06-2026)
+==================
 
 Changed
 -------
@@ -63,8 +66,8 @@ Changed
   ``rarg_python_patterns.multiton`` subpackage. ``from rarg_python_patterns
   import Multiton`` continues to work via top-level re-exports (:pr:`5`).
 
-0.0.1
-=====
+0.0.1 (04-06-2026)
+==================
 
 Added
 -----
